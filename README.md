@@ -1,0 +1,1 @@
+projecting_sentences_with_xll.ipynb is a simple jupyter notebook allowing you to use multi-lingual XL-LEXEME (https://github.com/pierluigic/xl-lexeme), as well as any other model, to create word embeddings in order to project and visualise how similar certain word usages are, according to the model.
