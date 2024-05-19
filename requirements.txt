@@ -1,0 +1,9 @@
+plotly==5.22.0
+regex==2024.5.15
+requests==2.31.0
+sentence-transformers==2.2.2
+torch==2.3.0
+tqdm==4.66.4
+transformers==4.41.0
+umap==0.1.1
+umap-learn==0.5.6
