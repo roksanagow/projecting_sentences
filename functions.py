@@ -1,40 +1,141 @@
-import importlib.util
-import requests
 import re
+from IPython.display import display, HTML
+import plotly.graph_objects as go
+import ipywidgets as widgets
+import pandas as pd
+import os
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE, MDS
+from umap import UMAP
 
-def setup():
-    def download_file(url, local_path):
-        response = requests.get(url)
-        with open(local_path, 'wb') as file:
-            file.write(response.content)
+def split_text(text, max_line_length):
+    return '<br>'.join(text[i:i + max_line_length] for i in range(0, len(text), max_line_length))
 
-    def load_module(name, path):
-        spec = importlib.util.spec_from_file_location(name, path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+def make_word_bold(text, word):
+    return text.replace(word, f"<b>{word}</b>")
 
-    # URLs of the files in the GitHub repository
-    word_transformer_url = 'https://raw.githubusercontent.com/pierluigic/xl-lexeme/main/WordTransformer/WordTransformer.py'
-    input_example_url = 'https://raw.githubusercontent.com/pierluigic/xl-lexeme/main/WordTransformer/InputExample.py'
+def project_group_and_scatter_plot_embeddings_interactive(
+    embeddings, sentences, words, n_clusters=5, dim_reducer='mds'
+):
+    if n_clusters > len(embeddings):
+        n_clusters = len(embeddings)
 
-    # Local paths where the files will be saved
-    word_transformer_path = '/tmp/WordTransformer.py'
-    input_example_path = '/tmp/InputExample.py'
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42).fit(embeddings)
+    labels = kmeans.labels_
 
-    # Download the files
-    download_file(word_transformer_url, word_transformer_path)
-    download_file(input_example_url, input_example_path)
+    # Dimensionality reduction
+    reducer = {
+        'umap': UMAP(n_components=2, random_state=42),
+        'mds': MDS(n_components=2, random_state=42),
+        'tsne': TSNE(n_components=2, random_state=42),
+        'pca': PCA(n_components=2)
+    }.get(dim_reducer)
+    if reducer is None:
+        raise ValueError(f"Unknown dimensionality reducer: {dim_reducer}")
 
-    # Load the modules
-    word_transformer_module = load_module("WordTransformer", word_transformer_path)
-    input_example_module = load_module("InputExample", input_example_path)
+    embeddings_2d = reducer.fit_transform(embeddings)
+    x, y = embeddings_2d[:, 0], embeddings_2d[:, 1]
 
-    # Import the desired classes
-    WordTransformer = word_transformer_module.WordTransformer
-    InputExample = input_example_module.InputExample
+    label_colors = ["green", "red", "blue", "orange", "purple"]
+    current_label = [0]
+    point_labels = [-1] * len(sentences)
+    click_groups = [[] for _ in label_colors]
 
-    return WordTransformer, InputExample
+    hover_text = [make_word_bold(split_text(s, 95), w) for s, w in zip(sentences, words)]
+
+    scatter_trace = go.Scatter(
+        x=x,
+        y=y,
+        mode='markers',
+        marker=dict(size=[10] * len(sentences), color=["grey"] * len(sentences)),
+        text=hover_text,
+        hoverinfo="text"
+    )
+    fig = go.FigureWidget([scatter_trace])
+    fig.update_layout(
+        title=f'Embeddings of sentences projected using {dim_reducer.upper()}',
+        xaxis_title='Dimension 1',
+        yaxis_title='Dimension 2',
+        hovermode='closest',
+        width=700,
+        height=700
+    )
+
+    output = widgets.Output()
+    scatter_trace = fig.data[0]
+
+    def on_click(trace, points, selector):
+        c = list(scatter_trace.marker.color)
+        for i in points.point_inds:
+            point_labels[i] = current_label[0]
+            c[i] = label_colors[current_label[0]]
+        with fig.batch_update():
+            scatter_trace.marker.color = c
+
+    scatter_trace.on_click(on_click)
+
+    def next_label(_):
+        current_label[0] = (current_label[0] + 1) % len(label_colors)
+        with output:
+            print(f"Switched to label {current_label[0]} ({label_colors[current_label[0]]})")
+
+    def finish_labeling(_):
+        for label in range(len(label_colors)):
+            group = [sentences[i] for i, lbl in enumerate(point_labels) if lbl == label]
+            click_groups[label] = group
+
+        with output:
+            print("✅ Sentence groups by label:")
+            for i, group in enumerate(click_groups):
+                color = label_colors[i]
+                display(HTML(
+                    f"<div style='color:{color}; font-weight: bold; margin-top:10px;'>"
+                    f"Label {i} ({color}): {len(group)} sentence(s):</div>"
+                ))
+                for sent in group:
+                    print(sent)
+
+            print("\n📋 Full result (list of lists):")
+            for i, group in enumerate(click_groups):
+                print(f"[Label {i}] {group}")
+
+    def save_sentences(_):
+        saved_sentences = pd.DataFrame(columns=['lemma','sentence','sense','start','end'])
+        word = words[0]
+        for i, group in enumerate(click_groups):
+            for sent in group:
+                start, end = get_positions(sent, word)
+                saved_sentences.loc[len(saved_sentences)] = [word, sent, i, start, end]
+
+
+        count = 1
+        # if saved_sentences/ doesn't exist, create it
+        if not os.path.exists('saved_sentences'):
+            os.makedirs('saved_sentences')
+        while os.path.exists(f'saved_sentences/{word}_labelled_sentences{count}.csv'):
+            count += 1
+        filename = f'saved_sentences/{word}_labelled_sentences{count}.csv' if count > 1 else f'saved_sentences/{word}_labelled_sentences.csv'
+
+        saved_sentences.to_csv(filename, index=False)
+        with output:
+            print(f"💾 Saved to {filename}")
+
+    btn_save = widgets.Button(description="Save Sentences", button_style='warning')
+    btn_save.on_click(save_sentences)
+    btn_next = widgets.Button(description="Next Label", button_style='info')
+    btn_finish = widgets.Button(description="Finish Labelling", button_style='success')
+    btn_next.on_click(next_label)
+    btn_finish.on_click(finish_labeling)
+
+    display(widgets.HBox([btn_next, btn_finish, btn_save]))
+    display(fig, output)
+
+    with output:
+        print(f"💡 Click to label. Current label: {current_label[0]} ({label_colors[0]})")
+
+    return fig
+
 
 def edit_distance(s1, s2):
     """Calculate the Levenshtein distance between two strings."""
@@ -109,105 +210,3 @@ def get_positions(sentence, word):
     else:
         start_pos, end_pos = find_position_of_similar_word(word, sentence)
     return [start_pos, end_pos]
-
-def format_sentences(sentences, words):
-    formatted = [InputExample(texts=sentence, positions=get_positions(sentence, word)) for sentence, word in zip(sentences, words)]
-    return formatted
-
-
-WordTransformer, InputExample = setup()
-
-#################################### Plotting embeddings functions
-
-import plotly.graph_objects as go
-from sklearn.cluster import KMeans
-from sklearn.manifold import TSNE, MDS
-from umap.umap_ import UMAP
-from sklearn.decomposition import PCA
-
-
-
-def project_group_and_scatter_plot_embeddings(embeddings, sentences, words, n_clusters=5, dim_reducer='mds'):
-    if n_clusters > len(embeddings):
-        n_clusters = len(embeddings)
-    # Step 1: Cluster the embeddings
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42).fit(embeddings)
-    labels = kmeans.labels_
-
-    # Step 2: Reduce dimensionality to 2D for visualization (using MDS in this case)
-    if dim_reducer == 'umap':
-        reducer = UMAP(n_components=2, random_state=42)
-    elif dim_reducer == 'mds':
-        reducer = MDS(n_components=2, random_state=42)
-    elif dim_reducer == 'tsne':
-        reducer = TSNE(n_components=2, random_state=42)
-    elif dim_reducer == 'pca':
-        reducer = PCA(n_components=2)
-    else:
-        raise ValueError(f"Unknown dimensionality reducer: {dim_reducer}")
-
-    # Step 2: Reduce dimensionality to 2D for visualization 
-    embeddings_2d = reducer.fit_transform(embeddings)
-
-    # Extract the 2D x and y coordinates
-    x = embeddings_2d[:, 0]
-    y = embeddings_2d[:, 1]
-
-    # Create scatter plot with Plotly
-    fig = go.Figure()
-
-    def split_text(text, max_line_length):
-        return '<br>'.join(text[i:i+max_line_length] for i in range(0, len(text), max_line_length))
-
-    def make_word_bold(text, word):
-        """Replace all occurrences of 'word' in 'text' with the same word wrapped in HTML bold tags."""
-        bold_word = f"<b>{word}</b>"
-        return text.replace(word, bold_word)
-
-    # Loop through the clusters to plot each one as a separate scatter trace
-    for i in range(n_clusters):
-        cluster_idx = labels == i
-        # get index of sentences in original sentences list
-        # get index of the embeddings in the original embeddings list
-        sentences_ids = [idx for idx, val in enumerate(embeddings) if val in embeddings[cluster_idx]]
-
-        hover_text = [f"({sent_id}) - {sentences[sent_id]}" for idx, sent_id in zip(cluster_idx, sentences_ids)]
-        # split up each text in hover text to have max 100 characters per line
-        hover_text = [split_text(text, 95) for text in hover_text]
-        # make the word bold in each sentence
-        hover_text = [make_word_bold(text, word) for text, word in zip(hover_text, words)]
-        
-        fig.add_trace(go.Scatter(x=x[cluster_idx], y=y[cluster_idx], mode='markers', 
-                                marker=dict(size=10),
-                                text=hover_text,  # Sentences for hover
-                                hoverinfo="text",
-                                name=f'Cluster {i+1}'))
-
-    # Customize layout
-    fig.update_layout(title=f'Embeddings of sentences projected using {dim_reducer.upper()}',
-                      xaxis_title='Dimension 1',
-                      yaxis_title='Dimension 2',
-                      hovermode='closest',# Tooltip shows info of the closest point
-                      width=600,
-                      height=600,
-                      autosize=False
-                      )  
-    # Show plot
-    fig.show()
-
-def scatter_plot_word_sentences(embeddings, sentences, words, n_clusters=2, dim_reducer='mds'):
-    # print('Getting sentences')
-    # sentences = get_sentences(text, word)
-    sentences = [sentence.split('\t')[1] for sentence in sentences if len(sentence.split('\t')) > 1]
-
-    # print('Embedding sentences')
-    # embeddings = [embed_word_in_sentence(sentence, word) for sentence, word in zip(sentences, words)]
-    # if len(embeddings) == 0:
-    #     print(f'No sentences found with the word {word}')
-    #     return
-    # embeddings = torch.cat(embeddings)
-
-    print('Projecting and plotting')
-    project_group_and_scatter_plot_embeddings(embeddings, sentences, words, n_clusters=n_clusters, dim_reducer=dim_reducer)
-
-    return sentences
