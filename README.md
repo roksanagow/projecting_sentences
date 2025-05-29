@@ -18,8 +18,6 @@ The goal of this project is to:
 
 ```
 .
-├── formatted_wic_files_16_reps/         # Output WiC-formatted files (example)
-├── formatted_wsd_files/                 # Saved annotated data (example)
 ├── functions.py                         # Utility functions used by notebooks
 ├── projecting_sentences_for_annotation.ipynb  # Interactive annotation interface
 ├── wic_formatting.ipynb                 # Conversion of annotations to WiC format
@@ -99,7 +97,7 @@ lemma,sentence,sense,start,end
    - Ensures no sentence overlap and preserves sense balance
 
 3. **WiC Pairing**  
-   - Pair sentences up to 16 times  
+   - Pair sentences, repeating each one up to n times in distinct pairs
    - Balanced mix of same-sense and different-sense pairs
 
 This procedure ensures robust and balanced training/testing data, even for low-resource settings.
